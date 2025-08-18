@@ -1,7 +1,20 @@
 ARG GO_VERSION=1.24.4
-ARG ALPINE_VERSION=3.22
+ARG GO_ALPINE_VERSION=3.22
+ARG NODE_VERSION=24
+ARG NODE_ALPINE_VERSION=3.22
 
-FROM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS builder
+FROM node:${NODE_VERSION}-alpine${NODE_ALPINE_VERSION} AS web-builder
+
+WORKDIR /src
+
+COPY web/package.json .
+COPY web/yarn.lock .
+RUN yarn install --pure-lockfile
+COPY web/ .
+
+RUN yarn build --outDir ./admin
+
+FROM golang:${GO_VERSION}-alpine${GO_ALPINE_VERSION} AS builder
 RUN apk update && \
     apk --no-cache add \
       make \
@@ -11,10 +24,12 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+COPY --from=web-builder /src/admin ./streamer/admin/
 RUN make build
 
 FROM scratch
 
 LABEL maintainer="kuvasz.io  <info@kuvasz.io>"
 COPY --from=builder /src/kuvasz-streamer ./
+
 ENTRYPOINT ["/kuvasz-streamer"]
