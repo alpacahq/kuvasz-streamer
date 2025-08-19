@@ -80,40 +80,48 @@ func main() {
 	_ = lim.Wait(context.Background()) // REMOVE ME
 	// Start main loop
 	RootChannel = make(chan string)
+	for {
+		SetStatus(StatusStarting)
+		err := SetupDestination()
+		if err != nil {
+			log.Error("Error setting up destination", "err", err)
+			os.Exit(1)
+		}
+		ReadMap()
+		dbmap.CompileRegexes()
+		// Create root context allowing cancellation of all goroutines
+		rootContext, rootCancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 
-	SetStatus(StatusStarting)
-	err := SetupDestination()
-	if err != nil {
-		log.Error("Error setting up destination", "err", err)
-		os.Exit(1)
-	}
-	ReadMap()
-	dbmap.CompileRegexes()
-	// Create root context allowing cancellation of all goroutines
-	rootContext, rootCancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+		// Loop through config and replicate databases
+		log.Info("Start processing source databases")
+		for _, database := range dbmap {
+			for i, url := range database.Urls {
+				log.Info("Starting replication thread", "db-sid", database.Name+"-"+url.SID, "url", url.URL)
+				wg.Add(1)
+				go DoReplicateDatabase(rootContext, database, &database.Urls[i])
+			}
+		}
+		SetStatus(StatusActive)
 
-	// Loop through config and replicate databases
-	log.Info("Start processing source databases")
-	for _, database := range dbmap {
-		for i, url := range database.Urls {
-			log.Info("Starting replication thread", "db-sid", database.Name+"-"+url.SID, "url", url.URL)
-			wg.Add(1)
-			go DoReplicateDatabase(rootContext, database, &database.Urls[i])
+		restart := false
+		select {
+		case <-RootChannel:
+			rootCancel()
+			log.Info("Restarting process")
+			restart = true
+		case <-rootContext.Done():
+		}
+		SetStatus(StatusStopping)
+		// wait until all workers exit
+		log.Debug("Waiting for workers to exit")
+		wg.Wait()
+		CloseDestination()
+		CloseConfigDB()
+		if restart {
+			log.Debug("Restarting..")
+		} else {
+			log.Debug("Stopping..")
+			os.Exit(0)
 		}
 	}
-	SetStatus(StatusActive)
-
-	select {
-	case <-RootChannel:
-		rootCancel()
-	case <-rootContext.Done():
-	}
-	SetStatus(StatusStopping)
-	// wait until all workers exit
-	log.Debug("Waiting for workers to exit")
-	wg.Wait()
-	CloseDestination()
-	CloseConfigDB()
-	log.Debug("Exiting")
-
 }
