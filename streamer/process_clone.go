@@ -45,6 +45,19 @@ func (op operation) buildWhere(
 	queryParameters []any) (string, []any) {
 	j := len(queryParameters) + 1
 
+	//TODO what is the case for delete
+	if old == 0 && len(oldValues) == 0 {
+		for column, value := range values {
+			if DestTables[tableName].Columns[column].PrimaryKey {
+				log.Debug("Update record by primary key", "column", column, "value", value)
+				query = fmt.Sprintf("%s AND %s=$%d", query, column, j)
+				queryParameters = append(queryParameters, value)
+				j++
+				return query, queryParameters
+			}
+		}
+	}
+
 	switch old {
 	case 'K', 0:
 		for _, column := range relation.Columns {
